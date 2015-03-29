@@ -1,0 +1,17 @@
+{
+  "name": "constant",
+  "version": "0.0.1",
+  "description": "Midi learning and composing",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "nunja",
+  "license": "bsd",
+  "dependencies": {
+    "lodash": "^3.6.0",
+    "midi-converter": "^0.1.4",
+    "midijs": "^0.11.0",
+    "synaptic": "^0.1.7"
+  }
+}
