@@ -1,8 +1,15 @@
 fs = require 'fs'
 _ = require 'lodash'
 midiConverter = require 'midi-converter'
+slug = require 'slug'
 
-#tools
+
+# # # # #
+# tools #
+# ..... #
+# # # # #
+
+# bin utils
 toBinArr = (value)->
   binstr = ("00000000" + (value).toString(2)).substr(-8,8)
   binarr = (parseInt v for v in binstr)
@@ -13,6 +20,51 @@ fromBinArr = (binarr)->
     binstr += v
   parseInt binstr, 2
 
+# merge pitch frames of same time to fit with LSTM epochs
+# there is a loss of data here
+mergePitchFrames = (frames)->
+  # result
+  merged = []
+  # get the last frame
+  last_time =  _.last(frames).time
+  # iterate 8 by 8
+  ct = 0
+  while ct <= last_time
+    res = _.where frames, {time:ct}
+    if res.length
+      # create flat
+      flat = (0 for i in [0..res[0].map.length-1])
+      # process each res
+      _.each res, (d)->
+        _.each d.map, (e,i)->
+          if e
+            flat[i] = 1
+      merged.push flat
+    ct += 2
+  #console.log merged.length, frames.length
+  return merged
+
+# there is a loss of data here
+mergeMaxFrames = (frames)->
+  # result
+  merged = []
+  # get the last frame
+  last_time =  _.last(frames).time
+  # iterate 8 by 8
+  ct = 0
+  while ct <= last_time
+    res = _.where frames, {time:ct}
+    if res.length
+      # takes the higher
+      higher = toBinArr 0
+      _.each res, (d)->
+        #console.log fromBinArr(d.map), fromBinArr(higher)
+        if fromBinArr(d.map) > fromBinArr(higher)
+          higher = d.map
+      merged.push higher
+    ct += 2
+
+  return merged
 
 # process args
 args = process.argv.slice 2
@@ -37,9 +89,16 @@ _.each jsonSong.tracks, (track)->
   ons = _.where track, {subtype:'noteOn'}
   real_tracks.push track if ons.length
 
-# what is the longest track
-max_tick = []
+# packed song
+packed_song = []
+# process the tracks
 _.each real_tracks, (track, ti)->
+
+  packed_track =
+    pitches: null
+    durations: null
+    velocities: null
+
   tcount = 0
   index = {}
   # here we store the pitches and durs as binary array
@@ -50,6 +109,13 @@ _.each real_tracks, (track, ti)->
   # 8 bits
   vel_bmap = []
   # process
+  # manage first rest to sync the tracks
+  firstOn = _.where track, {subtype:'noteOn'}
+  if firstOn[0].deltaTime > 0
+    pitch_bmap.push {time:0, map:(0 for [0..23])} #nopitch
+    dur_bmap.push {time:0, map: toBinArr(firstOn[0].deltaTime/ticksPerThirtySecond)}
+    vel_bmap.push {time:0, map: toBinArr(0)}
+
   _.each track, (evt, ei)->
     if evt.subtype is 'noteOn' or evt.subtype is 'noteOff'
       tcount += evt.deltaTime/ticksPerThirtySecond
@@ -72,5 +138,13 @@ _.each real_tracks, (track, ti)->
           # delete, noteOn/Off processed
           delete index[evt.noteNumber%24]
 
+  packed_track.pitches = mergePitchFrames pitch_bmap
+  packed_track.durations = mergeMaxFrames dur_bmap
+  packed_track.velocities = mergeMaxFrames vel_bmap
 
-  console.log(pitch_bmap) if ti < 1
+  #console.log packed_track.pitches.length, packed_track.durations.length, packed_track.velocities.length
+  packed_song.push packed_track
+
+# store the song info
+name = slug _.first(_.last(midi_path.split('/')).split('.'))
+fs.writeFileSync './data/'+name+'.json', JSON.stringify(packed_song, null, 2), 'utf8'
