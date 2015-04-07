@@ -95,6 +95,7 @@ packed_song = []
 _.each real_tracks, (track, ti)->
 
   packed_track =
+    offset: 0
     pitches: null
     durations: null
     velocities: null
@@ -112,9 +113,10 @@ _.each real_tracks, (track, ti)->
   # manage first rest to sync the tracks
   firstOn = _.where track, {subtype:'noteOn'}
   if firstOn[0].deltaTime > 0
-    pitch_bmap.push {time:0, map:(0 for [0..23])} #nopitch
-    dur_bmap.push {time:0, map: toBinArr(firstOn[0].deltaTime/ticksPerThirtySecond)}
-    vel_bmap.push {time:0, map: toBinArr(0)}
+    packed_track.offset = firstOn[0].deltaTime/ticksPerThirtySecond
+    # pitch_bmap.push {time:0, map:(0 for [0..23])} #nopitch
+    # dur_bmap.push {time:0, map: toBinArr(firstOn[0].deltaTime/ticksPerThirtySecond)}
+    # vel_bmap.push {time:0, map: toBinArr(0)}
 
   _.each track, (evt, ei)->
     if evt.subtype is 'noteOn' or evt.subtype is 'noteOff'
@@ -147,4 +149,5 @@ _.each real_tracks, (track, ti)->
 
 # store the song info
 name = slug _.first(_.last(midi_path.split('/')).split('.'))
-fs.writeFileSync './data/'+name+'.json', JSON.stringify(packed_song, null, 2), 'utf8'
+song = {name:name, raw:packed_song}
+fs.writeFileSync './data/'+name+'.json', JSON.stringify(song, null, 2), 'utf8'

@@ -9,6 +9,7 @@
   "author": "nunja",
   "license": "bsd",
   "dependencies": {
+    "clusterhub": "^0.2.6",
     "lodash": "^3.6.0",
     "midi-converter": "^0.1.4",
     "midijs": "^0.11.0",
