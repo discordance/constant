@@ -33,12 +33,14 @@ mergePitchFrames = (frames)->
     res = _.where frames, {time:ct}
     if res.length
       # create flat
-      flat = (0 for i in [0..res[0].map.length-1])
+      flat = [] # (0 for i in [0..(res[0].map.length-1)*3])
       # process each res
-      _.each res, (d)->
-        _.each d.map, (e,i)->
-          if e
-            flat[i] = 1
+      _.each res, (d,i)->
+        if i <= 3
+          flat = flat.concat d.map
+      while flat.length < 12
+        flat.push 0
+
       merged.push flat
     ct += 2
   #console.log merged.length, frames.length
@@ -121,7 +123,7 @@ _.each real_tracks, (track, ti)->
   _.each track, (evt, ei)->
     if evt.subtype is 'noteOn' or evt.subtype is 'noteOff'
       tcount += evt.deltaTime/ticksPerThirtySecond
-      pitch = evt.noteNumber%24
+      pitch = evt.noteNumber%12
       if evt.subtype is 'noteOn'
         index[pitch] = {vel: evt.velocity, ontime: tcount}
       if evt.subtype is 'noteOff'
@@ -130,8 +132,9 @@ _.each real_tracks, (track, ti)->
           dur = tcount - index[pitch].ontime
           bindur = toBinArr dur
           binvel = toBinArr index[pitch].vel
-          binpitch = (0 for [0..23])
-          binpitch[pitch] = 1
+          binpitch = toBinArr(pitch).slice(4,8)
+          # binpitch = (0 for [0..23])
+          # binpitch[pitch] = 1
 
           # push
           pitch_bmap.push {time:time, map:binpitch}
