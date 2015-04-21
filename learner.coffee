@@ -1,5 +1,5 @@
 cluster = require 'cluster'
-numCPUs = require('os').cpus().length
+numCPUs = require('os').cpus().length-2
 hub = require 'clusterhub'
 fs = require 'fs'
 _ = require 'lodash'
@@ -49,95 +49,126 @@ opts =
 chunk_size = 8
 
 if cluster.isMaster
-  # count dones
-  hub.set 'dones', 0, ->
-    hub.set 'networks', {}, ->
-      # Fork workers.
-      i = 0
-      while i < numCPUs/2
-        cluster.fork()
-        i++
-      # exit event
+  # Fork workers.
+  i = 0
+  while i < numCPUs
+    cluster.fork()
+    i++
+  # prepare pile of tasks
+  # empty tasks
+  hub.set 'tasks', [], ->
+    # results, classified by type and by frag order
+    hub.set 'networks', {pitch:{}, dur:{}, vel:{}}, ->
+      # exit event, likely to happen progressively
       cluster.on 'exit', (worker, code, signal) ->
         console.log 'worker ' + worker.process.pid + ' died'
         return
 
-      hub.on 'finish', (data) ->
-        console.log "finish !"
-        hub.get 'networks', (value)->
-          console.log value
+      tasks = []
+      ids = 0
+      console.log "Start the tasks ..."
+      # create tasks
+      _.each song.raw, (track, i) ->
+        # chunk it to learnable fragments
+        pitch_frags = _.chunk track.pitches, chunk_size
+        dur_frags = _.chunk track.pitches, chunk_size
+        vel_frags = _.chunk track.pitches, chunk_size
+
+        # interleave
+        for ii in [0..pitch_frags.length-1]
+          if ii
+            pitch_frags[ii].unshift _.last pitch_frags[ii-1]
+        for ii in [0..dur_frags.length-1]
+          if ii
+            dur_frags[ii].unshift _.last dur_frags[ii-1]
+        for ii in [0..vel_frags.length-1]
+          if ii
+            vel_frags[ii].unshift _.last vel_frags[ii-1]
+
+        # a task per pitch frag
+        _.each pitch_frags, (frag, i)->
+          task = {frag:i, type:'pitch', id:ids}
+          task.train_set = toTrainSet frag
+          tasks.push task
+          ids++
+
+        _.each dur_frags, (frag, i)->
+          task = {frag:i, type:'dur', id:ids}
+          task.train_set = toTrainSet frag
+          tasks.push task
+          ids++
+
+        _.each vel_frags, (frag, i)->
+          task = {frag:i, type:'vel', id:ids}
+          task.train_set = toTrainSet frag
+          task.net = new Architect.LSTM(8,8,8,8)
+          tasks.push task
+          ids++
+
+      console.log "Created #{tasks.length} tasks, launching #{numCPUs} threads on it"
+      hub.set 'tasks', tasks, ->
+        # thread say he is free, give him a task
+        hub.on 'task_free', (data)->
+          console.log "#{data.id} is free"
+          if data.result
+            console.log "store the processed result"
+            hub.get 'networks', (nets)->
+              nets[data.task.type][data.task.frag] = data.result
+              hub.set 'networks', nets, ->
+                hub.get 'tasks', (tasks) ->
+                  # finished
+                  if !tasks.length
+                    console.log 'finished'
+                    fs.writeFileSync './data/'+song_name+'_nets.json', JSON.stringify(nets, null, 2), 'utf8'
+                  task = tasks.shift()
+                  hub.set 'tasks', tasks, ->
+                    hub.emitRemote 'task', {id:data.id, task:task}
+          else
+            # give him some new job
+            hub.get 'tasks', (tasks) ->
+              task = tasks.shift()
+              hub.set 'tasks', tasks, ->
+                hub.emitRemote 'task', {id:data.id, task:task}
+
 else
 
   id = cluster.worker.id-1
-  track = song.raw[id]
-  if track
-    # chunk it to learnable fragments
-    pitch_frags = _.chunk track.pitches, chunk_size
-    dur_frags = _.chunk track.pitches, chunk_size
-    vel_frags = _.chunk track.pitches, chunk_size
+  free = true
 
-    # learn pitches
-    # pitch_nets = []
-    # _.each pitch_frags, (frag, i)->
-    #   train = toTrainSet frag
-    #   pitch_net = new Architect.LSTM(24,48,24)
-    #   opts.customLog =
-    #     every: 10
-    #     do: (err)->
-    #       console.log "Thread:", id+1, "- Pitch frag:", i+1, "iteration:", err.iterations, " err:", err.error
-    #   trainer = new Trainer pitch_net
-    #   console.log "Start to train -> Thread:", id+1, "- Pitch frag:", i+1
-    #   trainer.train train, opts
-    #   pitch_nets.push pitch_net.toJSON()
+  hub.emitRemote 'task_free', {id:id}
 
-    # learn durs
-    dur_nets = []
-    _.each dur_frags, (frag, i)->
-      train = toTrainSet frag
-      dur_net = new Architect.LSTM(8,8,8,8,8)
-      opts.customLog =
-        every: 250
-        do: (err)->
-          console.log "Thread:", id+1, "- Duration frag:", i+1, "iteration:", err.iterations, " err:", err.error
-      trainer = new Trainer dur_net
-      console.log "Start to train -> Thread:", id+1, "- Duration frag:", i+1
-      trainer.train train, opts
-      dur_nets.push dur_net.toJSON()
+  hub.on 'task', (data)->
+    # check if its for me
+    if data.id is id
+      if free
+        free = false
+        net = null
+        # pitch
+        if data.task.type is 'pitch'
+          net = new Architect.LSTM(12,12,12,12)
+          opts.customLog =
+            every: 250
+            do: (err)->
+              console.log "Thread:", id+1, "- Pitch frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
+        # pitch
+        if data.task.type is 'dur'
+          net = new Architect.LSTM(8,8,8,8)
+          opts.customLog =
+            every: 250
+            do: (err)->
+              console.log "Thread:", id+1, "- Duration frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
+        # vel
+        if data.task.type is 'vel'
+          net = new Architect.LSTM(8,8,8,8)
+          opts.customLog =
+            every: 250
+            do: (err)->
+              console.log "Thread:", id+1, "- Velocity frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
 
-    # learn vels
-    vel_nets = []
-    _.each vel_frags, (frag, i)->
-      train = toTrainSet frag
-      vel_net = new Architect.LSTM(8,8,8,8,8)
-      opts.customLog =
-        every: 250
-        do: (err)->
-          console.log "Thread:", id+1, "- Velocity frag:", i+1, "iteration:", err.iterations, " err:", err.error
-      trainer = new Trainer vel_net
-      console.log "Start to train -> Thread:", id+1, "- Velocity frag:", i+1
-      trainer.train train, opts
-      vel_nets.push vel_net.toJSON()
+        trainer = new Trainer net
+        console.log "Start to train -> Thread:", id+1, "- #{data.task.type} frag:", data.task.frag+1
+        trainer.train data.task.train_set, opts
 
-    hub.incr 'dones', (val) ->
-      # save tracks nets
-      hub.get 'networks', (value)->
-        value[id] = {
-          dur_nets: dur_nets,
-          vel_nets: vel_nets
-        }
-        hub.set 'networks', value, ->
-          if val is num_tracks
-            hub.emitRemote 'finish'
-          process.exit 0
-
-
-      #console.log train
-    #console.log pitch_frags.length, dur_frags.length, vel_frags.length
-
-    # something to eat
-    # pitch_net = new Architect.LSTM(24,24,24,24)
-    # dur_net = new Architect.LSTM(8,8,8,8)
-    # vel_net = new Architect.LSTM(8,8,8,8)
-
-  # hub.on 'song', (data) ->
-  #   console.log data
+        free = true
+        hub.emitRemote 'task_free', {id:id, task: data.task, result: net.toJSON()}
+        console.log "FREEE SA RACE"
