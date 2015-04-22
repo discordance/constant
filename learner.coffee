@@ -39,7 +39,7 @@ num_tracks = song.raw.length
 # machine learning options
 opts =
   rate: .008
-  iterations: 50000
+  iterations: 30000
   error: .005
   shuffle: false
   #cost: Trainer.cost.CROSS_ENTROPY
@@ -57,8 +57,10 @@ if cluster.isMaster
   # prepare pile of tasks
   # empty tasks
   hub.set 'tasks', [], ->
+    tracks_net = ({pitch:{}, dur:{}, vel:{}} for i in [0..song.raw.length-1])
+    console.log tracks_net.length
     # results, classified by type and by frag order
-    hub.set 'networks', {pitch:{}, dur:{}, vel:{}}, ->
+    hub.set 'networks', tracks_net, ->
       # exit event, likely to happen progressively
       cluster.on 'exit', (worker, code, signal) ->
         console.log 'worker ' + worker.process.pid + ' died'
@@ -68,7 +70,7 @@ if cluster.isMaster
       ids = 0
       console.log "Start the tasks ..."
       # create tasks
-      _.each song.raw, (track, i) ->
+      _.each song.raw, (track, track_num) ->
         # chunk it to learnable fragments
         pitch_frags = _.chunk track.pitches, chunk_size
         dur_frags = _.chunk track.pitches, chunk_size
@@ -87,19 +89,19 @@ if cluster.isMaster
 
         # a task per pitch frag
         _.each pitch_frags, (frag, i)->
-          task = {frag:i, type:'pitch', id:ids}
+          task = {track: track_num, frag:i, type:'pitch', id:ids}
           task.train_set = toTrainSet frag
           tasks.push task
           ids++
 
         _.each dur_frags, (frag, i)->
-          task = {frag:i, type:'dur', id:ids}
+          task = {track: track_num, frag:i, type:'dur', id:ids}
           task.train_set = toTrainSet frag
           tasks.push task
           ids++
 
         _.each vel_frags, (frag, i)->
-          task = {frag:i, type:'vel', id:ids}
+          task = {track: track_num, frag:i, type:'vel', id:ids}
           task.train_set = toTrainSet frag
           task.net = new Architect.LSTM(8,8,8,8)
           tasks.push task
@@ -113,7 +115,7 @@ if cluster.isMaster
           if data.result
             console.log "store the processed result"
             hub.get 'networks', (nets)->
-              nets[data.task.type][data.task.frag] = data.result
+              nets[data.task.track][data.task.type][data.task.frag] = data.result
               hub.set 'networks', nets, ->
                 hub.get 'tasks', (tasks) ->
                   # finished
@@ -121,8 +123,9 @@ if cluster.isMaster
                     console.log 'finished'
                     fs.writeFileSync './data/'+song_name+'_nets.json', JSON.stringify(nets, null, 2), 'utf8'
                   task = tasks.shift()
-                  hub.set 'tasks', tasks, ->
-                    hub.emitRemote 'task', {id:data.id, task:task}
+                  if task
+                    hub.set 'tasks', tasks, ->
+                      hub.emitRemote 'task', {id:data.id, task:task}
           else
             # give him some new job
             hub.get 'tasks', (tasks) ->
@@ -149,26 +152,25 @@ else
           opts.customLog =
             every: 250
             do: (err)->
-              console.log "Thread:", id+1, "- Pitch frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
+              console.log "Thread:", id+1, "Track: #{data.task.track} - Pitch frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
         # pitch
         if data.task.type is 'dur'
           net = new Architect.LSTM(8,8,8,8)
           opts.customLog =
             every: 250
             do: (err)->
-              console.log "Thread:", id+1, "- Duration frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
+              console.log "Thread:", id+1, "Track: #{data.task.track} - Duration frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
         # vel
         if data.task.type is 'vel'
           net = new Architect.LSTM(8,8,8,8)
           opts.customLog =
             every: 250
             do: (err)->
-              console.log "Thread:", id+1, "- Velocity frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
+              console.log "Thread:", id+1, "Track: #{data.task.track} - Velocity frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
 
         trainer = new Trainer net
-        console.log "Start to train -> Thread:", id+1, "- #{data.task.type} frag:", data.task.frag+1
+        console.log "Start to train -> Thread:", id+1, "Track: #{data.task.track} - #{data.task.type} frag:", data.task.frag+1
         trainer.train data.task.train_set, opts
 
         free = true
         hub.emitRemote 'task_free', {id:id, task: data.task, result: net.toJSON()}
-        console.log "FREEE SA RACE"
