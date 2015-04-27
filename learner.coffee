@@ -141,6 +141,7 @@ else
   hub.emitRemote 'task_free', {id:id}
 
   hub.on 'task', (data)->
+    return if !data.task
     # check if its for me
     if data.id is id
       if free
