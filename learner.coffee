@@ -121,7 +121,7 @@ if cluster.isMaster
                   # finished
                   if !tasks.length
                     console.log 'finished'
-                    fs.writeFileSync './data/'+song_name+'_nets.json', JSON.stringify(nets, null, 2), 'utf8'
+                    fs.writeFileSync './data/net/'+song_name+'.json', JSON.stringify(nets, null, 2), 'utf8'
                   task = tasks.shift()
                   if task
                     hub.set 'tasks', tasks, ->

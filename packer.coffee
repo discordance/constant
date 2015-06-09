@@ -153,4 +153,4 @@ _.each real_tracks, (track, ti)->
 # store the song info
 name = slug _.first(_.last(midi_path.split('/')).split('.'))
 song = {name:name, raw:packed_song}
-fs.writeFileSync './data/'+name+'.json', JSON.stringify(song, null, 2), 'utf8'
+fs.writeFileSync './data/pack/'+name+'.json', JSON.stringify(song, null, 2), 'utf8'
