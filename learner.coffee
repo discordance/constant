@@ -1,5 +1,5 @@
 cluster = require 'cluster'
-numCPUs = require('os').cpus().length-2
+numCPUs = require('os').cpus().length
 hub = require 'clusterhub'
 fs = require 'fs'
 _ = require 'lodash'
