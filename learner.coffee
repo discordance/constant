@@ -32,7 +32,7 @@ if !song_name or song_name[0] is '-'
   process.exit 1
 
 # load file
-song_json = fs.readFileSync('./data/'+song_name+'.json', 'utf8')
+song_json = fs.readFileSync('./data/pack/'+song_name+'.json', 'utf8')
 song = JSON.parse song_json
 num_tracks = song.raw.length
 
