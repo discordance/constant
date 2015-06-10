@@ -1,5 +1,5 @@
 cluster = require 'cluster'
-numCPUs = require('os').cpus().length
+numCPUs = 1#require('os').cpus().length
 hub = require 'clusterhub'
 fs = require 'fs'
 _ = require 'lodash'
@@ -44,6 +44,37 @@ opts =
   shuffle: false
   #cost: Trainer.cost.CROSS_ENTROPY
   cost: Trainer.cost.MSE
+
+work = (opts, data, callback)-> 
+  net = null
+  # pitch
+  if data.task.type is 'pitch'
+    net = new Architect.LSTM(12,12,12,12)
+    opts.customLog =
+      every: 250
+      do: (err)->
+        console.log "Thread:", id, "Track: #{data.task.track} - Pitch frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
+  # pitch
+  if data.task.type is 'dur'
+    net = new Architect.LSTM(8,8,8,8)
+    opts.customLog =
+      every: 250
+      do: (err)->
+        console.log "Thread:", id, "Track: #{data.task.track} - Duration frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
+  # vel
+  if data.task.type is 'vel'
+    net = new Architect.LSTM(8,8,8,8)
+    opts.customLog =
+      every: 250
+      do: (err)->
+        console.log "Thread:", id, "Track: #{data.task.track} - Velocity frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
+
+  trainer = new Trainer net
+  console.log "Start to train -> Thread:", id, "Track: #{data.task.track} - #{data.task.type} frag:", data.task.frag+1
+
+  trainer.train data.task.train_set, opts
+  callback net
+
 
 # chunk size -> how much training chunks to use
 chunk_size = 8
@@ -141,38 +172,9 @@ else
   hub.emitRemote 'task_free', {id:id}
 
   hub.on 'task', (data)->
-    console.log 'task', id, data.id
     return if !data.task
-    # check if its for me
-    if data.id is id
-      if free
-        free = false
-        net = null
-        # pitch
-        if data.task.type is 'pitch'
-          net = new Architect.LSTM(12,12,12,12)
-          opts.customLog =
-            every: 250
-            do: (err)->
-              console.log "Thread:", id+1, "Track: #{data.task.track} - Pitch frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
-        # pitch
-        if data.task.type is 'dur'
-          net = new Architect.LSTM(8,8,8,8)
-          opts.customLog =
-            every: 250
-            do: (err)->
-              console.log "Thread:", id+1, "Track: #{data.task.track} - Duration frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
-        # vel
-        if data.task.type is 'vel'
-          net = new Architect.LSTM(8,8,8,8)
-          opts.customLog =
-            every: 250
-            do: (err)->
-              console.log "Thread:", id+1, "Track: #{data.task.track} - Velocity frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
-
-        trainer = new Trainer net
-        console.log "Start to train -> Thread:", id+1, "Track: #{data.task.track} - #{data.task.type} frag:", data.task.frag+1
-        trainer.train data.task.train_set, opts
-
+    if free
+      free = false
+      work opts, data, (net)->
         free = true
         hub.emitRemote 'task_free', {id:id, task: data.task, result: net.toJSON()}
