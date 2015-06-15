@@ -1,180 +1,167 @@
-cluster = require 'cluster'
-numCPUs = 1#require('os').cpus().length
-hub = require 'clusterhub'
+# rewrite learner
 fs = require 'fs'
 _ = require 'lodash'
 synaptic = require 'synaptic'
 Trainer = synaptic.Trainer
 Architect = synaptic.Architect
-
-# # # # #
-# tools #
-# ..... #
-# # # # #
-
-# make training set
-toTrainSet = (frag)->
-  trainingSet = []
-  _.each frag, (d,i)->
-    if frag[i+1]
-      trainingSet.push {
-        input: frag[i],
-        output: frag[i+1]
-      }
-  return trainingSet
-
-# process args
-args = process.argv.slice 2
-# get midi file path
-song_name = args[args.indexOf('-n')+1]
-if !song_name or song_name[0] is '-'
-  console.log "no song name provided"
-  process.exit 1
-
-# load file
-song_json = fs.readFileSync('./data/pack/'+song_name+'.json', 'utf8')
-song = JSON.parse song_json
-num_tracks = song.raw.length
-
-# machine learning options
-opts =
-  rate: .008
-  iterations: 30000
-  error: .005
-  shuffle: false
-  #cost: Trainer.cost.CROSS_ENTROPY
-  cost: Trainer.cost.MSE
-
-work = (opts, data, callback)-> 
-  net = null
-  # pitch
-  if data.task.type is 'pitch'
-    net = new Architect.LSTM(12,12,12,12)
-    opts.customLog =
-      every: 250
-      do: (err)->
-        console.log "Thread:", id, "Track: #{data.task.track} - Pitch frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
-  # pitch
-  if data.task.type is 'dur'
-    net = new Architect.LSTM(8,8,8,8)
-    opts.customLog =
-      every: 250
-      do: (err)->
-        console.log "Thread:", id, "Track: #{data.task.track} - Duration frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
-  # vel
-  if data.task.type is 'vel'
-    net = new Architect.LSTM(8,8,8,8)
-    opts.customLog =
-      every: 250
-      do: (err)->
-        console.log "Thread:", id, "Track: #{data.task.track} - Velocity frag:", data.task.frag+1, "iteration:", err.iterations, " err:", err.error
-
-  trainer = new Trainer net
-  console.log "Start to train -> Thread:", id, "Track: #{data.task.track} - #{data.task.type} frag:", data.task.frag+1
-
-  trainer.train data.task.train_set, opts
-  callback net
+numCPUs = require('os').cpus().length-4
+Worker = require('webworker-threads').Worker
 
 
-# chunk size -> how much training chunks to use
-chunk_size = 8
+class LearnerThreaded
 
-if cluster.isMaster
-  # Fork workers.
-  i = 0
-  while i < numCPUs
-    cluster.fork()
-    i++
-  # prepare pile of tasks
-  # empty tasks
-  hub.set 'tasks', [], ->
-    tracks_net = ({pitch:{}, dur:{}, vel:{}} for i in [0..song.raw.length-1])
-    console.log tracks_net.length
-    # results, classified by type and by frag order
-    hub.set 'networks', tracks_net, ->
-      # exit event, likely to happen progressively
-      cluster.on 'exit', (worker, code, signal) ->
-        console.log 'worker ' + worker.process.pid + ' died'
-        return
+  chunk_size: 8
+  # make training set
+  toTrainSet: (frag)->
+    trainingSet = []
+    _.each frag, (d,i)->
+      if frag[i+1]
+        trainingSet.push {
+          input: frag[i],
+          output: frag[i+1]
+        }
+    return trainingSet
 
-      tasks = []
-      ids = 0
-      console.log "Start the tasks ..."
-      # create tasks
-      _.each song.raw, (track, track_num) ->
-        # chunk it to learnable fragments
-        pitch_frags = _.chunk track.pitches, chunk_size
-        dur_frags = _.chunk track.pitches, chunk_size
-        vel_frags = _.chunk track.pitches, chunk_size
+  finish: ()->
+    console.log "finishing", @song_name
+    fs.writeFileSync './data/net/'+@song_name+'.json', JSON.stringify(@nets, null, 2), 'utf8'
 
-        # interleave
-        for ii in [0..pitch_frags.length-1]
-          if ii
-            pitch_frags[ii].unshift _.last pitch_frags[ii-1]
-        for ii in [0..dur_frags.length-1]
-          if ii
-            dur_frags[ii].unshift _.last dur_frags[ii-1]
-        for ii in [0..vel_frags.length-1]
-          if ii
-            vel_frags[ii].unshift _.last vel_frags[ii-1]
+  buildTasks: (song_name)->
+    # load file
+    song_json = fs.readFileSync('./data/pack/'+song_name+'.json', 'utf8')
+    song = JSON.parse song_json
+    num_tracks = song.raw.length
+    @nets = ({pitch:{}, dur:{}, vel:{}} for i in [0..song.raw.length-1])
+    @song_name = song_name
+    tasks = []
+    ids = 0
+    console.log "Start the tasks ..."
+    # create tasks
+    _.each song.raw, (track, track_num) =>
+      # chunk it to learnable fragments
+      pitch_frags = _.chunk track.pitches, @chunk_size
+      dur_frags = _.chunk track.pitches, @chunk_size
+      vel_frags = _.chunk track.pitches, @chunk_size
 
-        # a task per pitch frag
-        _.each pitch_frags, (frag, i)->
-          task = {track: track_num, frag:i, type:'pitch', id:ids}
-          task.train_set = toTrainSet frag
-          tasks.push task
-          ids++
+      # interleave
+      for ii in [0..pitch_frags.length-1]
+        if ii
+          pitch_frags[ii].unshift _.last pitch_frags[ii-1]
+      for ii in [0..dur_frags.length-1]
+        if ii
+          dur_frags[ii].unshift _.last dur_frags[ii-1]
+      for ii in [0..vel_frags.length-1]
+        if ii
+          vel_frags[ii].unshift _.last vel_frags[ii-1]
 
-        _.each dur_frags, (frag, i)->
-          task = {track: track_num, frag:i, type:'dur', id:ids}
-          task.train_set = toTrainSet frag
-          tasks.push task
-          ids++
+      # a task per pitch frag
+      _.each pitch_frags, (frag, i)=>
+        task = {track: track_num, frag:i, type:'pitch', id:ids}
+        task.train_set = @toTrainSet frag
+        tasks.push task
+        ids++
 
-        _.each vel_frags, (frag, i)->
-          task = {track: track_num, frag:i, type:'vel', id:ids}
-          task.train_set = toTrainSet frag
-          task.net = new Architect.LSTM(8,8,8,8)
-          tasks.push task
-          ids++
+      _.each dur_frags, (frag, i)=>
+        task = {track: track_num, frag:i, type:'dur', id:ids}
+        task.train_set = @toTrainSet frag
+        tasks.push task
+        ids++
 
-      console.log "Created #{tasks.length} tasks, launching #{numCPUs} threads on it"
-      hub.set 'tasks', tasks, ->
-        # thread say he is free, give him a task
-        hub.on 'task_free', (data)->
-          console.log "#{data.id} is free"
-          if data.result
-            console.log "store the processed result"
-            hub.get 'networks', (nets)->
-              nets[data.task.track][data.task.type][data.task.frag] = data.result
-              hub.set 'networks', nets, ->
-                hub.get 'tasks', (tasks) ->
-                  # finished
-                  if !tasks.length
-                    console.log 'finished'
-                    fs.writeFileSync './data/net/'+song_name+'.json', JSON.stringify(nets, null, 2), 'utf8'
-                  task = tasks.shift()
-                  if task
-                    hub.set 'tasks', tasks, ->
-                      hub.emitRemote 'task', {id:data.id, task:task}
-          else
-            # give him some new job
-            hub.get 'tasks', (tasks) ->
-              task = tasks.shift()
-              hub.set 'tasks', tasks, ->
-                hub.emitRemote 'task', {id:data.id, task:task}
+      _.each vel_frags, (frag, i)=>
+        task = {track: track_num, frag:i, type:'vel', id:ids}
+        task.train_set = @toTrainSet frag
+        tasks.push task
+        ids++
 
-else
+    console.log "Created #{tasks.length} tasks, can use #{numCPUs} threads on it"
+    return tasks
+  
+  launchThreads: (tasks)->
+    template = ()->
+      # typed array shims
+      importScripts 'workerlib/typedarray.js'
+      self.Float64Array = Array#typedarray.Float64Array
+      # import synaptic lib in the worker
+      importScripts 'workerlib/synaptic.min.js'
+      Trainer = synaptic.Trainer
+      Architect = synaptic.Architect
+      # options config
+      # machine learning options
+      @opts =
+        rate: .01
+        iterations: 30000
+        error: .005
+        shuffle: false
+        #cost: Trainer.cost.CROSS_ENTROPY
+        cost: Trainer.cost.MSE
 
-  id = cluster.worker.id-1
-  free = true
+      # the worker function that will train lstm
+      @work = (opts, task, tid, callback)->
+        net = null
+        # pitch
+        if task.type is 'pitch'
+          net = new Architect.LSTM(12,12,12,12)
+          opts.schedule =
+            every: 100
+            do: (err)->
+              console.log "Thread: "+tid+" Track: #{task.track} - Pitch frag: "+task.frag+" iteration: "+err.iterations+" err: "+err.error
+        # pitch
+        if task.type is 'dur'
+          net = new Architect.LSTM(8,8,8,8)
+          opts.schedule =
+            every: 100
+            do: (err)->
+              console.log "Thread: "+tid+" Track: #{task.track} - Duration frag: "+task.frag+" iteration: "+err.iterations+" err: "+ err.error
+        # vel
+        if task.type is 'vel'
+          net = new Architect.LSTM(8,8,8,8)
+          opts.schedule =
+            every: 100
+            do: (err)->
+              console.log "Thread: "+tid+" Track: #{task.track} - Velocity frag: "+ task.frag+ " iteration: "+err.iterations+" err: "+err.error
 
-  hub.emitRemote 'task_free', {id:id}
+        trainer = new Trainer net
+        console.log "Start to train -> Thread: "+tid+" Track: #{task.track} - #{task.type} frag: "+task.frag
 
-  hub.on 'task', (data)->
-    return if !data.task
-    if free
-      free = false
-      work opts, data, (net)->
-        free = true
-        hub.emitRemote 'task_free', {id:id, task: data.task, result: net.toJSON()}
+        trainer.train task.train_set, opts
+        callback net
+        
+      @onmessage = (message)->
+        if message.data.type is 'task'
+          try
+            @work @opts, message.data.task, self.thread.id, (net)->
+              postMessage {net: net.toJSON(), task: message.data.task}
+          catch err
+            console.log err.message
+        if message.data.type is 'end'
+          self.close()
+      
+    # build workers
+    workers = []
+    for i in [0..numCPUs-1]
+      worker = new Worker template
+      workers.push worker
+    _.each workers, (worker)=>
+      worker.onmessage = (message)=>
+        @nets[message.data.task.track][message.data.task.type][message.data.task.frag] = message.data.net
+        next_task = tasks.shift()
+        if next_task
+          worker.postMessage {type:'task', task: next_task}
+        else
+          @finish()
+          worker.terminate()
+
+      next_task = tasks.shift()
+      worker.postMessage {type:'task', task: next_task}
+     
+    # worker.postMessage {type:'task', task: task}
+
+
+learner = new LearnerThreaded()
+tasks = learner.buildTasks "newwaveable"
+learner.launchThreads tasks
+
+
+
+
+
