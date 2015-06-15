@@ -89,7 +89,9 @@ real_tracks = []
 _.each jsonSong.tracks, (track)->
   # count node on and note off
   ons = _.where track, {subtype:'noteOn'}
-  real_tracks.push track if ons.length
+  # no drums
+  if ons[0].channel isnt 9
+    real_tracks.push track if ons.length
 
 # packed song
 packed_song = []

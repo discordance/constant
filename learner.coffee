@@ -12,7 +12,7 @@ class LearnerThreaded
   # main function
   run: (song_name, callback)->
     @callback = callback
-    tasks = @buildTasks "newwaveable"
+    tasks = @buildTasks song_name
     @launchThreads tasks
 
   chunk_size: 8
@@ -166,11 +166,18 @@ class LearnerThreaded
     # worker.postMessage {type:'task', task: task}
 
 
-# learner = new LearnerThreaded()
-# learner.run 'newwaveable', ()->
-  # console.log 'finished properly'
 
 module.exports = LearnerThreaded
+# process args
+#
+args = process.argv.slice 2
+# get midi file path
+song_name = args[args.indexOf('-n')+1]
+if song_name
+  console.log 'we got', song_name
+  learner = new LearnerThreaded()
+  learner.run song_name, ()->
+    console.log 'finished properly'
 
 
 
