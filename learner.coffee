@@ -4,11 +4,16 @@ _ = require 'lodash'
 synaptic = require 'synaptic'
 Trainer = synaptic.Trainer
 Architect = synaptic.Architect
-numCPUs = require('os').cpus().length-4
+numCPUs = Math.ceil(require('os').cpus().length/2)
 Worker = require('webworker-threads').Worker
 
 
 class LearnerThreaded
+  # main function
+  run: (song_name, callback)->
+    @callback = callback
+    tasks = @buildTasks "newwaveable"
+    @launchThreads tasks
 
   chunk_size: 8
   # make training set
@@ -22,9 +27,12 @@ class LearnerThreaded
         }
     return trainingSet
 
-  finish: ()->
-    console.log "finishing", @song_name
-    fs.writeFileSync './data/net/'+@song_name+'.json', JSON.stringify(@nets, null, 2), 'utf8'
+  finish: (workers)->
+    if !Object.keys(workers).length
+      console.log "finishing", @song_name
+      fs.writeFileSync './data/net/'+@song_name+'.json', JSON.stringify(@nets, null, 2), 'utf8'
+      if @callback
+        @callback()
 
   buildTasks: (song_name)->
     # load file
@@ -137,10 +145,10 @@ class LearnerThreaded
           self.close()
       
     # build workers
-    workers = []
+    workers = {}
     for i in [0..numCPUs-1]
       worker = new Worker template
-      workers.push worker
+      workers[worker.thread.id] = worker
     _.each workers, (worker)=>
       worker.onmessage = (message)=>
         @nets[message.data.task.track][message.data.task.type][message.data.task.frag] = message.data.net
@@ -148,7 +156,8 @@ class LearnerThreaded
         if next_task
           worker.postMessage {type:'task', task: next_task}
         else
-          @finish()
+          delete workers[worker.thread.id]
+          @finish workers
           worker.terminate()
 
       next_task = tasks.shift()
@@ -157,11 +166,11 @@ class LearnerThreaded
     # worker.postMessage {type:'task', task: task}
 
 
-learner = new LearnerThreaded()
-tasks = learner.buildTasks "newwaveable"
-learner.launchThreads tasks
+# learner = new LearnerThreaded()
+# learner.run 'newwaveable', ()->
+  # console.log 'finished properly'
 
-
+module.exports = LearnerThreaded
 
 
 
