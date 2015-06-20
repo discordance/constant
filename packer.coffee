@@ -90,7 +90,7 @@ _.each jsonSong.tracks, (track)->
   # count node on and note off
   ons = _.where track, {subtype:'noteOn'}
   # no drums
-  if ons[0].channel isnt 9
+  if ons[0] and ons[0].channel isnt 9
     real_tracks.push track if ons.length
 
 # packed song
@@ -106,6 +106,7 @@ _.each real_tracks, (track, ti)->
 
   tcount = 0
   index = {}
+  
   # here we store the pitches and durs as binary array
   # 24 bits
   pitch_bmap = []
@@ -118,9 +119,6 @@ _.each real_tracks, (track, ti)->
   firstOn = _.where track, {subtype:'noteOn'}
   if firstOn[0].deltaTime > 0
     packed_track.offset = firstOn[0].deltaTime/ticksPerThirtySecond
-    # pitch_bmap.push {time:0, map:(0 for [0..23])} #nopitch
-    # dur_bmap.push {time:0, map: toBinArr(firstOn[0].deltaTime/ticksPerThirtySecond)}
-    # vel_bmap.push {time:0, map: toBinArr(0)}
 
   _.each track, (evt, ei)->
     if evt.subtype is 'noteOn' or evt.subtype is 'noteOff'
@@ -130,13 +128,11 @@ _.each real_tracks, (track, ti)->
         index[pitch] = {vel: evt.velocity, ontime: tcount}
       if evt.subtype is 'noteOff'
         if index[pitch]
-          time = index[pitch].ontime
-          dur = tcount - index[pitch].ontime
+          time = Math.round index[pitch].ontime
+          dur = Math.round(tcount - index[pitch].ontime)
           bindur = toBinArr dur
           binvel = toBinArr index[pitch].vel
           binpitch = toBinArr(pitch).slice(4,8)
-          # binpitch = (0 for [0..23])
-          # binpitch[pitch] = 1
 
           # push
           pitch_bmap.push {time:time, map:binpitch}
@@ -145,11 +141,14 @@ _.each real_tracks, (track, ti)->
           # delete, noteOn/Off processed
           delete index[evt.noteNumber%24]
 
+  pitch_bmap = _.sortBy pitch_bmap, (n)-> n.time
+  dur_bmap = _.sortBy dur_bmap, (n)-> n.time
+  vel_bmap = _.sortBy vel_bmap, (n)-> n.time
   packed_track.pitches = mergePitchFrames pitch_bmap
   packed_track.durations = mergeMaxFrames dur_bmap
   packed_track.velocities = mergeMaxFrames vel_bmap
 
-  #console.log packed_track.pitches.length, packed_track.durations.length, packed_track.velocities.length
+  console.log packed_track.pitches.length, packed_track.durations.length, packed_track.velocities.length
   packed_song.push packed_track
 
 # store the song info
