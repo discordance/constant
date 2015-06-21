@@ -123,7 +123,7 @@ _.each real_tracks, (track, ti)->
   _.each track, (evt, ei)->
     if evt.subtype is 'noteOn' or evt.subtype is 'noteOff'
       tcount += evt.deltaTime/ticksPerThirtySecond
-      pitch = evt.noteNumber%12
+      pitch = evt.noteNumber%12 + 1
       if evt.subtype is 'noteOn'
         index[pitch] = {vel: evt.velocity, ontime: tcount}
       if evt.subtype is 'noteOff'
@@ -132,6 +132,8 @@ _.each real_tracks, (track, ti)->
           dur = Math.round(tcount - index[pitch].ontime)
           bindur = toBinArr dur
           binvel = toBinArr index[pitch].vel
+          console.log dur, index[pitch].vel
+          console.log bindur, binvel
           binpitch = toBinArr(pitch).slice(4,8)
 
           # push

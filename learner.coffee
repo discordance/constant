@@ -48,8 +48,9 @@ class LearnerThreaded
     _.each song.raw, (track, track_num) =>
       # chunk it to learnable fragments
       pitch_frags = _.chunk track.pitches, @chunk_size
-      dur_frags = _.chunk track.pitches, @chunk_size
-      vel_frags = _.chunk track.pitches, @chunk_size
+      dur_frags = _.chunk track.durations, @chunk_size
+      vel_frags = _.chunk track.velocities, @chunk_size
+      console.log vel_frags, "VEL FRAG"
 
       # interleave
       for ii in [0..pitch_frags.length-1]
